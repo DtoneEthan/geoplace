@@ -100,43 +100,89 @@
     }));
   }
 
+  /* ---------- Pinyin helper (for Chinese input; Open-Meteo has weak Chinese coverage) ---------- */
+  let _pinyinFn = null;
+  async function getPinyin() {
+    if (_pinyinFn) return _pinyinFn;
+    const mod = await import("./vendor/pinyin-pro.js");
+    _pinyinFn = mod.pinyin;
+    return _pinyinFn;
+  }
+  // Common administrative suffixes that break Open-Meteo matching when kept ("汕头市" -> "shantou shi" = 0)
+  const ADMIN_SUFFIX = [" shi", " qu", " xian", " sheng", " zhen", " xiang",
+    " jiedao", " cun", " zhou", " diqu", " meng", " shi qu", " shi xian"];
+  function stripAdminSuffix(py) {
+    let s = " " + py;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const suf of ADMIN_SUFFIX) {
+        if (s.endsWith(suf)) { s = s.slice(0, s.length - suf.length); changed = true; }
+      }
+    }
+    return s.trim();
+  }
+  function hasChinese(s) { return /[一-鿿]/.test(s); }
+
+  function searchOpenMeteo(query, signal, lang) {
+    const url =
+      "https://geocoding-api.open-meteo.com/v1/search?name=" +
+      encodeURIComponent(query) +
+      "&count=6&language=" + encodeURIComponent(lang) + "&format=json";
+    return fetch(url, { signal, headers: { "Accept-Language": lang } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => (d ? normalizeOpenMeteo(d) : []))
+      .catch(() => []);
+  }
+
   async function geocode(query) {
     if (abortCtrl) abortCtrl.abort();
     abortCtrl = new AbortController();
+    const signal = abortCtrl.signal;
     const lang = omLanguage();
 
-    // 1) Open-Meteo (primary)
-    try {
-      const omUrl =
-        "https://geocoding-api.open-meteo.com/v1/search?name=" +
-        encodeURIComponent(query) +
-        "&count=6&language=" + encodeURIComponent(lang) + "&format=json";
-      const omRes = await fetch(omUrl, {
-        signal: abortCtrl.signal,
-        headers: { "Accept-Language": lang },
-      });
-      if (omRes.ok) {
-        const omData = await omRes.json();
-        const items = normalizeOpenMeteo(omData);
-        if (items.length) return items;
+    // 1) Direct query (handles English / pinyin / partial Chinese names)
+    let items = await searchOpenMeteo(query, signal, lang);
+    if (items.length) return items;
+
+    // 2) Chinese -> pinyin variants (Open-Meteo's Chinese coverage is incomplete)
+    if (hasChinese(query)) {
+      try {
+        const pyFn = await getPinyin();
+        const py = pyFn(query, { toneType: "none" });   // "shan tou shi"
+        const cleaned = stripAdminSuffix(py);            // "shan tou"
+        const continuous = cleaned.replace(/\s+/g, "");  // "shantou"
+        const variants = [];
+        const seen = new Set();
+        const pushV = (v) => {
+          if (v && v !== query && !seen.has(v)) { seen.add(v); variants.push(v); }
+        };
+        if (cleaned) pushV(cleaned);
+        // Insert apostrophe before first a/e/o -> "xian" -> "xi'an" (Xi'an, 西安)
+        const ai = continuous.search(/[aeo]/i);
+        if (continuous && ai > 0) pushV(continuous.slice(0, ai) + "'" + continuous.slice(ai));
+        if (continuous) pushV(continuous);
+        const firstWord = cleaned.split(/\s+/)[0];
+        if (firstWord) pushV(firstWord);
+        for (const v of variants) {
+          const r = await searchOpenMeteo(v, signal, lang);
+          if (r.length) return r;
+        }
+      } catch (e) {
+        /* pinyin module unavailable — skip to Nominatim */
       }
-    } catch (e) {
-      /* network blocked or error — fall through to Nominatim */
     }
 
-    // 2) Nominatim fallback
+    // 3) Nominatim fallback (rest of the world; often blocked in mainland China)
     const nomUrl =
       "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&accept-language=" +
       encodeURIComponent(lang) + "&q=" + encodeURIComponent(query);
-    const res = await fetch(nomUrl, {
-      signal: abortCtrl.signal,
-      headers: { "Accept-Language": lang },
-    });
+    const res = await fetch(nomUrl, { signal, headers: { "Accept-Language": lang } });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const nomData = await res.json();
-    const items = normalizeNominatim(nomData);
-    if (!items.length) throw new Error("empty");
-    return items;
+    const items2 = normalizeNominatim(nomData);
+    if (!items2.length) throw new Error("empty");
+    return items2;
   }
 
   function fmt(n) {
