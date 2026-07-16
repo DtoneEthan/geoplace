@@ -199,8 +199,79 @@
     resultEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  /* ---------- Map basemaps (China-accessible + global fallback) ----------
+     geoq / geoqGray / amap use GCJ-02 (China offset) tiles; osm is WGS-84.
+     The marker is reprojected to the active basemap's CRS so it stays aligned. */
+  const BASEMAPS = {
+    geoq: {
+      url: "https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}",
+      attr: "© Geoq 智图", crs: "gcj02", subdomains: "",
+    },
+    geoqGray: {
+      url: "https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineStreetGray/MapServer/tile/{z}/{y}/{x}",
+      attr: "© Geoq 智图", crs: "gcj02", subdomains: "",
+    },
+    amap: {
+      url: "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+      attr: "© 高德地图", crs: "gcj02", subdomains: "1234",
+    },
+    osm: {
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      attr: "© OpenStreetMap", crs: "wgs84", subdomains: "abc",
+    },
+  };
+  let currentBaseKey = "geoq";
+  let baseLayer = null;
+  let autoFallbackDepth = 0;
+  let lastLat = null, lastLng = null, lastLabel = null;
+
+  function makeBaseLayer(key) {
+    const b = BASEMAPS[key];
+    return L.tileLayer(b.url, {
+      maxZoom: 18,
+      attribution: b.attr,
+      subdomains: b.subdomains,
+    });
+  }
+
+  // WGS-84 -> GCJ-02 (China offset) so markers align on Chinese basemaps
+  const GCJ_A = 6378245.0, GCJ_EE = 0.00669342162296594323, GCJ_PI = Math.PI;
+  function outOfChina(lat, lng) {
+    return !(lng > 73.66 && lng < 135.05 && lat > 3.86 && lat < 53.55);
+  }
+  function transformLat(x, y) {
+    let r = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    r += (20 * Math.sin(6 * x * GCJ_PI) + 20 * Math.sin(2 * x * GCJ_PI)) * 2 / 3;
+    r += (20 * Math.sin(y * GCJ_PI) + 40 * Math.sin(y / 3 * GCJ_PI)) * 2 / 3;
+    r += (160 * Math.sin(y / 12 * GCJ_PI) + 320 * Math.sin(y * GCJ_PI / 30)) * 2 / 3;
+    return r;
+  }
+  function transformLng(x, y) {
+    let r = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    r += (20 * Math.sin(6 * x * GCJ_PI) + 20 * Math.sin(2 * x * GCJ_PI)) * 2 / 3;
+    r += (20 * Math.sin(x * GCJ_PI) + 40 * Math.sin(x / 3 * GCJ_PI)) * 2 / 3;
+    r += (150 * Math.sin(x / 12 * GCJ_PI) + 300 * Math.sin(x / 30 * GCJ_PI)) * 2 / 3;
+    return r;
+  }
+  function wgs84ToGcj02(lat, lng) {
+    if (outOfChina(lat, lng)) return [lat, lng];
+    let dLat = transformLat(lng - 105.0, lat - 35.0);
+    let dLng = transformLng(lng - 105.0, lat - 35.0);
+    const radLat = (lat / 180) * GCJ_PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - GCJ_EE * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180) / ((GCJ_A * (1 - GCJ_EE)) / (magic * sqrtMagic) * GCJ_PI);
+    dLng = (dLng * 180) / (GCJ_A / sqrtMagic * Math.cos(radLat) * GCJ_PI);
+    return [lat + dLat, lng + dLng];
+  }
+  function projectForBasemap(lat, lng, key) {
+    return BASEMAPS[key].crs === "gcj02" ? wgs84ToGcj02(lat, lng) : [lat, lng];
+  }
+
   function drawMap(lat, lng, label) {
     if (typeof L === "undefined") return; // map library unavailable — coords still shown
+    lastLat = lat; lastLng = lng; lastLabel = label;
     if (!map) {
       // Point Leaflet's default markers at the locally bundled images
       if (L.Icon && L.Icon.Default) {
@@ -211,18 +282,51 @@
         });
       }
       map = L.map(mapEl, { scrollWheelZoom: false }).setView([lat, lng], 12);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "© OpenStreetMap",
-      }).addTo(map);
-      marker = L.marker([lat, lng]).addTo(map);
+      baseLayer = makeBaseLayer(currentBaseKey);
+      baseLayer.addTo(map);
+      const p = projectForBasemap(lat, lng, currentBaseKey);
+      marker = L.marker(p).addTo(map);
+      bindTileErrorFallback();
     } else {
       map.setView([lat, lng], 12);
-      marker.setLatLng([lat, lng]);
+      const p = projectForBasemap(lat, lng, currentBaseKey);
+      marker.setLatLng(p);
     }
     if (label) marker.bindPopup(label).openPopup();
     // Container may have just been un-hidden — fix sizing
     setTimeout(() => map.invalidateSize(), 60);
+  }
+
+  function switchBasemap(key, resetDepth) {
+    if (!map || !BASEMAPS[key] || key === currentBaseKey) return;
+    currentBaseKey = key;
+    if (resetDepth) autoFallbackDepth = 0;
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseLayer = makeBaseLayer(key);
+    baseLayer.addTo(map);
+    baseLayer.bringToBack();
+    if (marker) marker.bringToFront();
+    bindTileErrorFallback();
+    if (lastLat != null) {
+      const p = projectForBasemap(lastLat, lastLng, key);
+      marker.setLatLng(p);
+      map.setView(p, map.getZoom());
+    }
+    document.querySelectorAll(".map-opt").forEach((b) =>
+      b.classList.toggle("active", b.dataset.base === key));
+  }
+
+  function bindTileErrorFallback() {
+    if (!baseLayer) return;
+    baseLayer.off("tileerror");
+    baseLayer.on("tileerror", () => {
+      const keys = Object.keys(BASEMAPS);
+      if (autoFallbackDepth >= keys.length) return; // tried every source
+      autoFallbackDepth++;
+      const idx = keys.indexOf(currentBaseKey);
+      const next = keys[(idx + 1) % keys.length];
+      if (next !== currentBaseKey) switchBasemap(next, false);
+    });
   }
 
   function showStatus(msg, kind) {
@@ -303,6 +407,11 @@
     const which = cb.getAttribute("data-copy");
     const val = which === "lat" ? latEl.textContent : lngEl.textContent;
     copyText(val, cb);
+  });
+
+  // Basemap switcher (China-accessible sources + global fallback)
+  document.querySelectorAll(".map-opt").forEach((b) => {
+    b.addEventListener("click", () => switchBasemap(b.dataset.base, true));
   });
 
   // Auto-locate on pause of typing (debounced) — keeps it feeling instant

@@ -62,6 +62,13 @@
             <button class="copy-btn" data-copy="lng" data-i18n="copy">Copy</button>
           </div>
         </div>
+        <div class="map-switch" role="group" aria-label="basemap">
+          <span class="map-switch-label" data-i18n="basemapLabel">底图</span>
+          <button type="button" class="map-opt active" data-base="geoq" data-i18n="mapStreet">街道</button>
+          <button type="button" class="map-opt" data-base="geoqGray" data-i18n="mapGray">灰色</button>
+          <button type="button" class="map-opt" data-base="amap" data-i18n="mapAmap">高德</button>
+          <button type="button" class="map-opt" data-base="osm" data-i18n="mapOSM">OSM</button>
+        </div>
         <div id="map" class="map" aria-label="map"></div>
       </section>
 
