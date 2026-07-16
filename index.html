@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoPlace — Place name → Latitude / Longitude</title>
+  <meta name="description" content="Type any place name and instantly get its latitude and longitude. Free, no sign-up, multilingual." />
+
+  <!-- Leaflet (open-source map, no API key) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">🌍</span>
+        <span class="brand-name" data-i18n="appTitle">GeoPlace</span>
+      </div>
+      <div class="lang-wrap">
+        <label for="langSelect" class="lang-label" data-i18n="langLabel">Language</label>
+        <select id="langSelect" class="lang-select" aria-label="Language"></select>
+      </div>
+    </header>
+
+    <main class="hero">
+      <h1 class="tagline" data-i18n="appTagline">Type a place name, get its coordinates instantly.</h1>
+
+      <form id="searchForm" class="search-bar" role="search" autocomplete="off">
+        <svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/>
+        </svg>
+        <input id="queryInput" class="search-input" type="text"
+               data-i18n="searchPlaceholder" data-i18n-attr="placeholder"
+               placeholder="Enter a city, address or landmark…" />
+        <button id="searchBtn" class="search-btn" type="submit" data-i18n="searchButton">Locate</button>
+      </form>
+
+      <p class="hint" data-i18n="hint">Press Enter or tap Locate.</p>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+
+      <!-- Result card -->
+      <section id="result" class="result-card" hidden>
+        <div class="result-head">
+          <span class="result-title" data-i18n="resultTitle">Coordinates</span>
+          <span id="resultPlace" class="result-place"></span>
+        </div>
+        <div class="coords">
+          <div class="coord">
+            <span class="coord-label" data-i18n="latitude">Latitude</span>
+            <span id="latValue" class="coord-value">—</span>
+            <button class="copy-btn" data-copy="lat" data-i18n="copy">Copy</button>
+          </div>
+          <div class="coord-divider" aria-hidden="true"></div>
+          <div class="coord">
+            <span class="coord-label" data-i18n="longitude">Longitude</span>
+            <span id="lngValue" class="coord-value">—</span>
+            <button class="copy-btn" data-copy="lng" data-i18n="copy">Copy</button>
+          </div>
+        </div>
+        <div id="map" class="map" aria-label="map"></div>
+      </section>
+
+      <!-- Alternative matches -->
+      <section id="alternatives" class="alt-list" hidden>
+        <h2 class="alt-title" data-i18n="alternatives">Other matches</h2>
+        <ul id="altItems" class="alt-items"></ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span id="attribution" data-i18n="attribution">Coordinates & map data © OpenStreetMap contributors</span>
+    </footer>
+  </div>
+
+  <script src="lang.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
