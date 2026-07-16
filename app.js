@@ -71,21 +71,72 @@
     if (currentResults.length) renderResults(currentResults, code);
   }
 
-  /* ---------- Geocoding (Nominatim / OpenStreetMap, no API key) ---------- */
+  /* ---------- Geocoding ----------
+     Primary : Open-Meteo geocoding (free, no key, CORS-enabled, works in mainland China).
+     Fallback: OpenStreetMap Nominatim (rest of the world / when Open-Meteo has no hit). */
+  function omLanguage() {
+    const c = langSelect.value;
+    if (c === "zh-TW") return "zh"; // Open-Meteo has no traditional-Chinese variant
+    return c.slice(0, 2);
+  }
+
+  function normalizeOpenMeteo(data) {
+    if (!data || !Array.isArray(data.results)) return [];
+    return data.results.map((r) => ({
+      lat: String(r.latitude),
+      lon: String(r.longitude),
+      display_name: [r.name, r.admin1, r.country, r.country_code]
+        .filter(Boolean)
+        .join(", "),
+    }));
+  }
+
+  function normalizeNominatim(data) {
+    if (!Array.isArray(data)) return [];
+    return data.map((r) => ({
+      lat: String(r.lat),
+      lon: String(r.lon),
+      display_name: r.display_name || "",
+    }));
+  }
+
   async function geocode(query) {
     if (abortCtrl) abortCtrl.abort();
     abortCtrl = new AbortController();
-    const lang = langSelect.value;
-    const url =
+    const lang = omLanguage();
+
+    // 1) Open-Meteo (primary)
+    try {
+      const omUrl =
+        "https://geocoding-api.open-meteo.com/v1/search?name=" +
+        encodeURIComponent(query) +
+        "&count=6&language=" + encodeURIComponent(lang) + "&format=json";
+      const omRes = await fetch(omUrl, {
+        signal: abortCtrl.signal,
+        headers: { "Accept-Language": lang },
+      });
+      if (omRes.ok) {
+        const omData = await omRes.json();
+        const items = normalizeOpenMeteo(omData);
+        if (items.length) return items;
+      }
+    } catch (e) {
+      /* network blocked or error — fall through to Nominatim */
+    }
+
+    // 2) Nominatim fallback
+    const nomUrl =
       "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&accept-language=" +
       encodeURIComponent(lang) + "&q=" + encodeURIComponent(query);
-
-    const res = await fetch(url, {
+    const res = await fetch(nomUrl, {
       signal: abortCtrl.signal,
       headers: { "Accept-Language": lang },
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    return res.json();
+    const nomData = await res.json();
+    const items = normalizeNominatim(nomData);
+    if (!items.length) throw new Error("empty");
+    return items;
   }
 
   function fmt(n) {
@@ -149,7 +200,16 @@
   }
 
   function drawMap(lat, lng, label) {
+    if (typeof L === "undefined") return; // map library unavailable — coords still shown
     if (!map) {
+      // Point Leaflet's default markers at the locally bundled images
+      if (L.Icon && L.Icon.Default) {
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: "vendor/leaflet/images/marker-icon-2x.png",
+          iconUrl: "vendor/leaflet/images/marker-icon.png",
+          shadowUrl: "vendor/leaflet/images/marker-shadow.png",
+        });
+      }
       map = L.map(mapEl, { scrollWheelZoom: false }).setView([lat, lng], 12);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
