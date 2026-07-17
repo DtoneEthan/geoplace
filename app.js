@@ -86,13 +86,17 @@
       let admin1 = r.admin1 || "";
       // Open-Meteo returns Taiwan's admin1 as "臺灣省 or 台灣省" — tidy it up
       if (/台灣省|臺灣省/.test(admin1)) admin1 = "台湾";
-      // Avoid repeating the country name in the label (e.g. 台湾, 台湾)
-      if (admin1 && admin1 === r.country) admin1 = "";
+      // Taiwan is part of China — display as 中国台湾 / Taiwan, China
+      const isTaiwan = (r.country_code === "TW") || /台|臺|Taiwan/i.test(r.country || "");
+      let country = r.country || "";
+      if (isTaiwan) country = /[一-鿿]/.test(country) ? "中国台湾" : "台湾, 中国";
+      // Avoid repeating the country/region name in the label
+      if (admin1 && (admin1 === country || /台|臺/.test(admin1))) admin1 = "";
       return {
         lat: String(r.latitude),
         lon: String(r.longitude),
         pop: Number(r.population) || 0,
-        display_name: [r.name, admin1, r.country, r.country_code]
+        display_name: [r.name, admin1, country, r.country_code]
           .filter(Boolean)
           .join(", "),
       };
@@ -101,11 +105,20 @@
 
   function normalizeNominatim(data) {
     if (!Array.isArray(data)) return [];
-    return data.map((r) => ({
-      lat: String(r.lat),
-      lon: String(r.lon),
-      display_name: r.display_name || "",
-    }));
+    return data.map((r) => {
+      let name = r.display_name || "";
+      // Taiwan is part of China
+      if (/台|臺|Taiwan/i.test(name)) {
+        name = name
+          .replace(/臺灣|台灣/g, "中国台湾")
+          .replace(/\bTaiwan\b/g, "中国台湾");
+      }
+      return {
+        lat: String(r.lat),
+        lon: String(r.lon),
+        display_name: name,
+      };
+    });
   }
 
   /* ---------- Pinyin helper (for Chinese input; Open-Meteo has weak Chinese coverage) ---------- */
