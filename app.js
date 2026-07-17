@@ -80,25 +80,33 @@
     return c.slice(0, 2);
   }
 
-  function normalizeOpenMeteo(data) {
+  // Chinese regions that are part of China — normalized to 国家=中国 / 省份=地区 / cc=CN
+  const CN_REGION_ZH = { TW: "台湾", HK: "香港", MO: "澳门" };
+  const CN_REGION_EN = { TW: "Taiwan", HK: "Hong Kong", MO: "Macau" };
+
+  function normalizeOpenMeteo(data, lang) {
     if (!data || !Array.isArray(data.results)) return [];
+    const zhUI = String(lang || "").toLowerCase().startsWith("zh");
     return data.results.map((r) => {
       let admin1 = r.admin1 || "";
       // Open-Meteo returns Taiwan's admin1 as "臺灣省 or 台灣省" — tidy it up
       if (/台灣省|臺灣省/.test(admin1)) admin1 = "台湾";
       let country = r.country || "";
-      // Taiwan is a province of China: show 国家=中国, 省份=台湾 (not as a country).
-      const isTaiwan = (r.country_code === "TW") || /台|臺|Taiwan/i.test(country);
-      if (isTaiwan) {
-        const zh = /[一-鿿]/.test(country) || /[一-鿿]/.test(admin1);
-        country = zh ? "中国" : "China";
-        admin1 = zh ? "台湾" : "Taiwan";
+      let countryCode = r.country_code || "";
+      const region = (zhUI ? CN_REGION_ZH : CN_REGION_EN)[r.country_code];
+      if (region) {
+        // Taiwan / Hong Kong / Macau are provinces/special regions of China
+        country = zhUI ? "中国" : "China";
+        admin1 = region;
+        countryCode = "CN";
       }
+      // Don't repeat the city name as the province (e.g. 香港, 香港)
+      if (admin1 && admin1 === r.name) admin1 = "";
       return {
         lat: String(r.latitude),
         lon: String(r.longitude),
         pop: Number(r.population) || 0,
-        display_name: [r.name, admin1, country, r.country_code]
+        display_name: [r.name, admin1, country, countryCode]
           .filter(Boolean)
           .join(", "),
       };
@@ -178,7 +186,7 @@
       "&count=6&language=" + encodeURIComponent(lang) + "&format=json";
     return fetch(url, { signal, headers: { "Accept-Language": lang } })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => (d ? normalizeOpenMeteo(d) : []))
+      .then((d) => (d ? normalizeOpenMeteo(d, lang) : []))
       .catch(() => []);
   }
 
