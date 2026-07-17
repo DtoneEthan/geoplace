@@ -82,13 +82,21 @@
 
   function normalizeOpenMeteo(data) {
     if (!data || !Array.isArray(data.results)) return [];
-    return data.results.map((r) => ({
-      lat: String(r.latitude),
-      lon: String(r.longitude),
-      display_name: [r.name, r.admin1, r.country, r.country_code]
-        .filter(Boolean)
-        .join(", "),
-    }));
+    return data.results.map((r) => {
+      let admin1 = r.admin1 || "";
+      // Open-Meteo returns Taiwan's admin1 as "臺灣省 or 台灣省" — tidy it up
+      if (/台灣省|臺灣省/.test(admin1)) admin1 = "台湾";
+      // Avoid repeating the country name in the label (e.g. 台湾, 台湾)
+      if (admin1 && admin1 === r.country) admin1 = "";
+      return {
+        lat: String(r.latitude),
+        lon: String(r.longitude),
+        pop: Number(r.population) || 0,
+        display_name: [r.name, admin1, r.country, r.country_code]
+          .filter(Boolean)
+          .join(", "),
+      };
+    });
   }
 
   function normalizeNominatim(data) {
@@ -124,6 +132,30 @@
   }
   function hasChinese(s) { return /[一-鿿]/.test(s); }
 
+  /* Cities whose standard English name uses a romanization DIFFERENT from
+     Hanyu Pinyin (mostly Wade-Giles / historical spellings). Open-Meteo indexes
+     them under the English spelling, so a pure-pinyin query ("taibei") only
+     matches same-named mainland villages. Mapping to the correct spelling makes
+     the right place win (e.g. 台北 -> taipei -> 台北市, 台湾). */
+  const CITY_ALIASES = {
+    "台北": ["taipei"], "臺北": ["taipei"],
+    "高雄": ["kaohsiung"],
+    "台中": ["taichung"], "臺中": ["taichung"],
+    "台南": ["tainan"], "臺南": ["tainan"],
+    "基隆": ["keelung"], "基隆市": ["keelung"],
+    "新竹": ["hsinchu"],
+    "嘉义": ["chiayi"], "嘉義": ["chiayi"],
+    "桃园": ["taoyuan"], "桃園": ["taoyuan"],
+    "台东": ["taitung"], "臺東": ["taitung"],
+    "花莲": ["hualien"], "花蓮": ["hualien"],
+    "宜兰": ["yilan"], "宜蘭": ["yilan"],
+    "澎湖": ["penghu"],
+    "金门": ["kinmen"], "金門": ["kinmen"],
+    "马祖": ["matsu"], "馬祖": ["matsu"],
+    "香港": ["hong kong", "hongkong"],
+    "澳门": ["macau", "macao"], "澳門": ["macau", "macao"],
+  };
+
   function searchOpenMeteo(query, signal, lang) {
     const url =
       "https://geocoding-api.open-meteo.com/v1/search?name=" +
@@ -140,40 +172,54 @@
     abortCtrl = new AbortController();
     const signal = abortCtrl.signal;
     const lang = omLanguage();
+    const raw = query.trim();
 
-    // 1) Direct query (handles English / pinyin / partial Chinese names)
-    let items = await searchOpenMeteo(query, signal, lang);
-    if (items.length) return items;
-
-    // 2) Chinese -> pinyin variants (Open-Meteo's Chinese coverage is incomplete)
-    if (hasChinese(query)) {
+    // Build a set of candidate search strings:
+    //  - the raw input (handles English / known Chinese names)
+    //  - alias spellings for cities whose English name != pinyin
+    //  - Chinese -> pinyin variants (Open-Meteo's Chinese coverage is incomplete)
+    const candidates = new Set([raw]);
+    const addAlias = (k) => { if (CITY_ALIASES[k]) CITY_ALIASES[k].forEach((a) => candidates.add(a)); };
+    addAlias(raw);
+    if (hasChinese(raw)) {
       try {
         const pyFn = await getPinyin();
-        const py = pyFn(query, { toneType: "none" });   // "shan tou shi"
-        const cleaned = stripAdminSuffix(py);            // "shan tou"
-        const continuous = cleaned.replace(/\s+/g, "");  // "shantou"
-        const variants = [];
-        const seen = new Set();
-        const pushV = (v) => {
-          if (v && v !== query && !seen.has(v)) { seen.add(v); variants.push(v); }
-        };
-        if (cleaned) pushV(cleaned);
+        const py = pyFn(raw, { toneType: "none" });      // "tai bei shi"
+        const cleaned = stripAdminSuffix(py);            // "tai bei"
+        const continuous = cleaned.replace(/\s+/g, "");  // "taibei"
+        if (cleaned) candidates.add(cleaned);
         // Insert apostrophe before first a/e/o -> "xian" -> "xi'an" (Xi'an, 西安)
         const ai = continuous.search(/[aeo]/i);
-        if (continuous && ai > 0) pushV(continuous.slice(0, ai) + "'" + continuous.slice(ai));
-        if (continuous) pushV(continuous);
+        if (continuous && ai > 0) candidates.add(continuous.slice(0, ai) + "'" + continuous.slice(ai));
+        if (continuous) candidates.add(continuous);
         const firstWord = cleaned.split(/\s+/)[0];
-        if (firstWord) pushV(firstWord);
-        for (const v of variants) {
-          const r = await searchOpenMeteo(v, signal, lang);
-          if (r.length) return r;
-        }
+        if (firstWord) candidates.add(firstWord);
+        addAlias(cleaned);
+        addAlias(continuous);
       } catch (e) {
-        /* pinyin module unavailable — skip to Nominatim */
+        /* pinyin module unavailable — rely on alias / raw / Nominatim */
       }
     }
 
-    // 3) Nominatim fallback (rest of the world; often blocked in mainland China)
+    // Query Open-Meteo for every candidate, merge, and rank by population
+    // (so a major city like 台北市, 台湾 wins over same-named small villages).
+    const merged = [];
+    const seen = new Set();
+    for (const c of candidates) {
+      const r = await searchOpenMeteo(c, signal, lang);
+      for (const it of r) {
+        const key = it.lat + "," + it.lon + "|" + it.display_name;
+        if (!seen.has(key)) { seen.add(key); merged.push(it); }
+      }
+      // Stop early once we have a real city (avoids pulling in noise from weaker candidates)
+      if (merged.some((x) => x.pop > 100000)) break;
+    }
+    if (merged.length) {
+      merged.sort((a, b) => b.pop - a.pop);
+      return merged;
+    }
+
+    // Nominatim fallback (rest of the world; often blocked in mainland China)
     const nomUrl =
       "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&accept-language=" +
       encodeURIComponent(lang) + "&q=" + encodeURIComponent(query);
