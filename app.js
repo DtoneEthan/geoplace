@@ -314,30 +314,17 @@
     resultEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  /* ---------- Map basemaps (China-accessible + global fallback) ----------
-     geoq / geoqGray / amap use GCJ-02 (China offset) tiles; osm is WGS-84.
-     The marker is reprojected to the active basemap's CRS so it stays aligned. */
+  /* ---------- Map basemap (AMap / 高德, China-accessible) ----------
+     AMap tiles use the GCJ-02 (China offset) CRS; the marker is reprojected
+     from WGS-84 so it stays aligned on the map. */
   const BASEMAPS = {
-    geoq: {
-      url: "https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}",
-      attr: "© Geoq 智图", crs: "gcj02", subdomains: "",
-    },
-    geoqGray: {
-      url: "https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineStreetGray/MapServer/tile/{z}/{y}/{x}",
-      attr: "© Geoq 智图", crs: "gcj02", subdomains: "",
-    },
     amap: {
       url: "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
       attr: "© 高德地图", crs: "gcj02", subdomains: "1234",
     },
-    osm: {
-      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      attr: "© OpenStreetMap", crs: "wgs84", subdomains: "abc",
-    },
   };
-  let currentBaseKey = "geoq";
+  let currentBaseKey = "amap";
   let baseLayer = null;
-  let autoFallbackDepth = 0;
   let lastLat = null, lastLng = null, lastLabel = null;
 
   function makeBaseLayer(key) {
@@ -401,7 +388,6 @@
       baseLayer.addTo(map);
       const p = projectForBasemap(lat, lng, currentBaseKey);
       marker = L.marker(p).addTo(map);
-      bindTileErrorFallback();
     } else {
       map.setView([lat, lng], 12);
       const p = projectForBasemap(lat, lng, currentBaseKey);
@@ -410,38 +396,6 @@
     if (label) marker.bindPopup(label).openPopup();
     // Container may have just been un-hidden — fix sizing
     setTimeout(() => map.invalidateSize(), 60);
-  }
-
-  function switchBasemap(key, resetDepth) {
-    if (!map || !BASEMAPS[key] || key === currentBaseKey) return;
-    currentBaseKey = key;
-    if (resetDepth) autoFallbackDepth = 0;
-    if (baseLayer) map.removeLayer(baseLayer);
-    baseLayer = makeBaseLayer(key);
-    baseLayer.addTo(map);
-    baseLayer.bringToBack();
-    if (marker) marker.bringToFront();
-    bindTileErrorFallback();
-    if (lastLat != null) {
-      const p = projectForBasemap(lastLat, lastLng, key);
-      marker.setLatLng(p);
-      map.setView(p, map.getZoom());
-    }
-    document.querySelectorAll(".map-opt").forEach((b) =>
-      b.classList.toggle("active", b.dataset.base === key));
-  }
-
-  function bindTileErrorFallback() {
-    if (!baseLayer) return;
-    baseLayer.off("tileerror");
-    baseLayer.on("tileerror", () => {
-      const keys = Object.keys(BASEMAPS);
-      if (autoFallbackDepth >= keys.length) return; // tried every source
-      autoFallbackDepth++;
-      const idx = keys.indexOf(currentBaseKey);
-      const next = keys[(idx + 1) % keys.length];
-      if (next !== currentBaseKey) switchBasemap(next, false);
-    });
   }
 
   function showStatus(msg, kind) {
@@ -522,11 +476,6 @@
     const which = cb.getAttribute("data-copy");
     const val = which === "lat" ? latEl.textContent : lngEl.textContent;
     copyText(val, cb);
-  });
-
-  // Basemap switcher (China-accessible sources + global fallback)
-  document.querySelectorAll(".map-opt").forEach((b) => {
-    b.addEventListener("click", () => switchBasemap(b.dataset.base, true));
   });
 
   // Auto-locate on pause of typing (debounced) — keeps it feeling instant
