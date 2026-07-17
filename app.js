@@ -86,12 +86,14 @@
       let admin1 = r.admin1 || "";
       // Open-Meteo returns Taiwan's admin1 as "臺灣省 or 台灣省" — tidy it up
       if (/台灣省|臺灣省/.test(admin1)) admin1 = "台湾";
-      // Taiwan is part of China — display as 中国台湾 / Taiwan, China
-      const isTaiwan = (r.country_code === "TW") || /台|臺|Taiwan/i.test(r.country || "");
       let country = r.country || "";
-      if (isTaiwan) country = /[一-鿿]/.test(country) ? "中国台湾" : "台湾, 中国";
-      // Avoid repeating the country/region name in the label
-      if (admin1 && (admin1 === country || /台|臺/.test(admin1))) admin1 = "";
+      // Taiwan is a province of China: show 国家=中国, 省份=台湾 (not as a country).
+      const isTaiwan = (r.country_code === "TW") || /台|臺|Taiwan/i.test(country);
+      if (isTaiwan) {
+        const zh = /[一-鿿]/.test(country) || /[一-鿿]/.test(admin1);
+        country = zh ? "中国" : "China";
+        admin1 = zh ? "台湾" : "Taiwan";
+      }
       return {
         lat: String(r.latitude),
         lon: String(r.longitude),
@@ -107,11 +109,11 @@
     if (!Array.isArray(data)) return [];
     return data.map((r) => {
       let name = r.display_name || "";
-      // Taiwan is part of China
+      // Taiwan is a province of China: 省份=台湾, 国家=中国
       if (/台|臺|Taiwan/i.test(name)) {
         name = name
-          .replace(/臺灣|台灣/g, "中国台湾")
-          .replace(/\bTaiwan\b/g, "中国台湾");
+          .replace(/臺灣|台灣/g, "台湾")
+          .replace(/\bTaiwan\b/g, "台湾, 中国");
       }
       return {
         lat: String(r.lat),
